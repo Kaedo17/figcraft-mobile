@@ -2,9 +2,11 @@
 //!
 //! Android has no system file picker the app can drive (rfd has no backend there), so the built-in
 //! file browser serves every file command over the app-private storage: no permissions and no
-//! Storage Access Framework round-trip, though invisible to the Files app (shared storage is a
-//! later step of the port). Pure path logic, unit-tested on the host; the data directory comes
-//! from [`crate::run_inner`], which records it before anything resolves the config folder.
+//! Storage Access Framework round-trip, though invisible to the Files app. Shared internal storage
+//! is the browser's second root, entered only while Android's "All files access" grant holds
+//! (checked and asked for by `apps/figcraft-android`'s `android_access.rs` over JNI). Pure path
+//! logic, unit-tested on the host; the data directory comes from [`crate::run_inner`], which
+//! records it before anything resolves the config folder.
 //!
 //! The app's own folder below the data directory is the config root ([`crate::services::config_dir`]
 //! on Android): preferences, the recovery copies and the installed plugins. The browser's Documents
@@ -15,6 +17,11 @@
 #![cfg_attr(not(target_os = "android"), allow(dead_code))]
 
 use std::path::{Path, PathBuf};
+
+/// Shared internal storage's root on Android: the in-app browser's second root
+/// (`Services::shared_storage_root`), entered only while the "All files access" grant holds —
+/// `apps/figcraft-android`'s `android_access.rs` checks and asks for it over JNI.
+pub const SHARED_ROOT: &str = "/storage/emulated/0";
 
 /// The storage folders below the app-private data directory.
 #[derive(Clone, Debug, PartialEq, Eq)]

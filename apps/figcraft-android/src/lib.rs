@@ -18,6 +18,9 @@
 //!
 //! On every other target this crate is empty: only Android's loader ever looks for `android_main`.
 
+#[cfg(target_os = "android")]
+mod android_access;
+
 /// NativeActivity's main-loop thread entry point (required; see the `android-activity` docs).
 /// winit pumps the activity's lifecycle and input events inside [`figcraft::run_android`], which
 /// needs the activity's handle to create its event loop; when the activity is destroyed that
@@ -25,7 +28,13 @@
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
 pub fn android_main(app: android_activity::AndroidApp) {
-    if let Err(e) = figcraft::run_android(app) {
+    // The "All files access" grant, checked and requested over JNI — this crate's unsafe stays
+    // in `android_access`; `run_android` only ever sees the plain closures built here.
+    let shared = android_access::capture(&app).map(|a| figcraft::SharedStorageAccess {
+        granted: std::sync::Arc::new(move || a.shared_storage_granted()),
+        ask: std::sync::Arc::new(move || a.ask_shared_storage_grant()),
+    });
+    if let Err(e) = figcraft::run_android(app, shared) {
         log::error!("figcraft exited with an error: {e}");
     }
 }

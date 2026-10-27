@@ -149,19 +149,35 @@ impl eframe::App for App {
 pub fn run() -> eframe::Result {
     #[cfg(target_os = "android")]
     {
-        run_inner(None)
+        run_inner(None, None)
     }
     #[cfg(not(target_os = "android"))]
     {
-        run_inner()
+        run_inner(None)
     }
 }
 
+/// Android's shared-storage capabilities, built by the entry crate — which owns the JNI to the
+/// activity's JVM, since AGENTS.md (Never crash) confines that `unsafe` to its `android_access.rs`
+/// — and handed to the in-app file browser as plain hooks: whether shared storage may be browsed
+/// right now, and how to ask for the grant. `None` when the entry crate could not reach the JVM:
+/// the browser then keeps its app-private root. Cloneable, because the app creator borrows the
+/// value once and each hook takes one of the closures behind it.
+#[derive(Clone)]
+pub struct SharedStorageAccess {
+    /// Whether the grant holds right now (re-checked at every tap on the switcher).
+    pub granted: std::sync::Arc<dyn Fn() -> bool + Send + Sync>,
+    /// Ask for it: the system settings page on Android 11+, the permission dialog before that.
+    pub ask: std::sync::Arc<dyn Fn() + Send + Sync>,
+}
+
 /// Android's entry: like [`run`], but with the activity's handle, which eframe's event loop cannot
-/// be created without — leaving it out ends the activity as soon as it starts.
+/// be created without — leaving it out ends the activity as soon as it starts — and with the
+/// optional shared-storage capabilities ([`SharedStorageAccess`]) the entry crate resolved
+/// through JNI.
 #[cfg(target_os = "android")]
-pub fn run_android(android_app: android_activity::AndroidApp) -> eframe::Result {
-    run_inner(Some(android_app))
+pub fn run_android(android_app: android_activity::AndroidApp, access: Option<SharedStorageAccess>) -> eframe::Result {
+    run_inner(Some(android_app), access)
 }
 
 /// Shared startup; `android_app` is the NativeActivity handle eframe needs on Android. Installs
@@ -169,7 +185,7 @@ pub fn run_android(android_app: android_activity::AndroidApp) -> eframe::Result 
 /// server, no automation roots, no files and no invite links — the home screen shows), restores
 /// preferences, opens requested documents or the home screen, starts the control server when
 /// asked, and runs the eframe event loop.
-fn run_inner(#[cfg(target_os = "android")] android_app: Option<android_activity::AndroidApp>) -> eframe::Result {
+fn run_inner(#[cfg(target_os = "android")] android_app: Option<android_activity::AndroidApp>, access: Option<SharedStorageAccess>) -> eframe::Result {
     // Windows: the update helper is a copy of this program started with `--finish-update`.
     #[cfg(windows)]
     if let Some(result) = craft_update::self_update::finish(&craft_update::suite::FIGCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
@@ -257,7 +273,18 @@ fn run_inner(#[cfg(target_os = "android")] android_app: Option<android_activity:
     let recovery_root = services::config_dir().map(|d| d.join("Recovery"));
     // The preferences first: they hold the online files a recovered document may be one of.
     let recovery = recovery::Shared::default();
-    let svc = services::Desktop::load(recovery.clone());
+    // Android sets the shared-storage hooks on it just below; elsewhere it stays as loaded.
+    #[cfg_attr(not(target_os = "android"), allow(unused_mut))]
+    let mut svc = services::Desktop::load(recovery.clone());
+    // Shared storage is Android's second browser root: the switcher between the app-private tree
+    // and `/storage/emulated/0`, entered only while the "All files access" grant holds (the
+    // closures re-check it at every tap and open the system page that grants it — the entry
+    // crate's JNI). The desktop and the web have their own pickers, so `access` is `None` there,
+    // no switcher is drawn, and every hook stays unset — exactly as before.
+    #[cfg(target_os = "android")]
+    svc.set_shared_storage(access);
+    #[cfg(not(target_os = "android"))]
+    let _ = access;
     svc.follow_system_dark(wake(&ctx_slot));
     if let Some(prefs) = svc.prefs.clone() {
         session.prefs = prefs;

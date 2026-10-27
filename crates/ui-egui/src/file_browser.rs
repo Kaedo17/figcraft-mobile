@@ -6,10 +6,13 @@
 //! A folder path field with Up one level and Home folder, the folder's subfolders and the files
 //! of the chosen type, a file name field and the file types. It only lists folders the user
 //! navigates to and never reads a file: the picked path goes to the same follow-up as the system
-//! dialog's. Navigation is clamped inside the host's app-private storage
-//! ([`Services::app_files_dir`]): *Up one level* stops at the root's top, the home-folder button
-//! goes to the app's Documents folder, and a typed pick outside the root is refused as not
-//! found. The desktop has no root and opens no browser — its system dialogs answer, as before.
+//! dialog's. Navigation is clamped inside the host's roots ([`Services::app_files_dir`], and —
+//! on Android — shared storage, [`Services::shared_storage_root`], behind a switcher): *Up one
+//! level* stops at the top of the root the browser is in, the home-folder button goes to the
+//! app's Documents folder, a typed pick outside the roots is refused as not found, and shared
+//! storage is entered only while Android's "All files access" grant holds (the tap opens the
+//! system page that grants it otherwise). The desktop has no roots and opens no browser — its
+//! system dialogs answer, as before.
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
@@ -21,7 +24,7 @@ use egui::{Align2, Rect, Sense, Ui, pos2, vec2};
 use crate::i18n::{tr, trf};
 use crate::theme::{Tokens, regular};
 use crate::widgets;
-use crate::{FigApp, Picked, icons};
+use crate::{FigApp, Picked, Services, icons};
 
 /// At most this many entries are listed; a bigger folder shows the first ones and says so.
 const MAX_LISTED: usize = 5000;
@@ -109,17 +112,20 @@ fn up_from(root: &Path, dir: &Path) -> Option<PathBuf> {
     }
 }
 
-/// Whether `p` is a folder the browser may open: under the root its navigation is clamped to.
-fn inside_root(p: &Path, root: &Path) -> bool {
-    p.starts_with(root)
+/// Whether `p` is a folder the browser may open: under the app-private root, or under the shared
+/// root when the host offers one.
+fn inside_root(p: &Path, app_root: &Path, shared_root: Option<&Path>) -> bool {
+    p.starts_with(app_root) || shared_root.is_some_and(|s| p.starts_with(s))
 }
 
-/// The root an Android browser's navigation is clamped to (the host's app-private storage). The
-/// desktop has none — `FileBrowser::roots` is `None` and every folder the user types is fair
-/// game.
+/// The roots an Android browser walks (the host's app-private storage, and shared storage when
+/// the host offers it): navigation is clamped inside them. The desktop has none —
+/// `FileBrowser::roots` is `None` and every folder the user types is fair game.
 pub(crate) struct Roots {
     /// The app-private root (`Services::app_files_dir`).
     pub(crate) app: PathBuf,
+    /// Shared internal storage once the host offers it (`Services::shared_storage_root`).
+    pub(crate) shared: Option<PathBuf>,
 }
 
 /// The app storage the browser starts in: its `Documents` folder when it exists, else the root.
@@ -160,6 +166,9 @@ enum Note {
     NotFound(String),
     /// The file exists: the next OK replaces it.
     Replace(PathBuf),
+    /// Shared storage needs Android's "All files access" before it can be browsed; the ask
+    /// opened the system page.
+    Grant,
 }
 
 /// What a pick asks for, when the built-in browser serves it (a host with no system file dialog):
@@ -266,23 +275,28 @@ impl FileBrowser {
         self.note = Note::None;
     }
 
-    /// The folder actually shown for `dir`: itself, or — when the browser is clamped and `dir` is
-    /// outside its root (a typed path, a jump) — the root's top.
+    /// The folder actually shown for `dir`: itself, or — when the browser is clamped and `dir`
+    /// is outside its roots (a typed path, a jump) — the top of the root the browser is in.
     fn clamped(&self, dir: PathBuf) -> PathBuf {
-        match &self.roots {
-            Some(roots) if inside_root(&dir, &roots.app) => dir,
-            Some(roots) => roots.app.clone(),
-            None => dir,
+        let Some(roots) = &self.roots else { return dir };
+        if inside_root(&dir, &roots.app, roots.shared.as_deref()) {
+            return dir;
+        }
+        match roots.shared.as_deref() {
+            Some(s) if self.dir.starts_with(s) => s.to_path_buf(),
+            _ => roots.app.clone(),
         }
     }
 
-    /// Where "Up one level" goes: the parent, clamped to the shown root on Android; `None` when
-    /// there is nowhere up to go (the root's top, or no parent on the desktop).
+    /// Where "Up one level" goes: the parent, clamped to the root the browser is in on Android;
+    /// `None` when there is nowhere up to go (the root's top, or no parent on the desktop).
     pub(crate) fn up_target(&self) -> Option<PathBuf> {
-        match &self.roots {
-            Some(roots) => up_from(&roots.app, &self.dir),
-            None => self.dir.parent().map(Path::to_path_buf),
-        }
+        let Some(roots) = &self.roots else { return self.dir.parent().map(Path::to_path_buf) };
+        let root: &Path = match roots.shared.as_deref() {
+            Some(s) if self.dir.starts_with(s) => s,
+            _ => &roots.app,
+        };
+        up_from(root, &self.dir)
     }
 
     fn up(&mut self) {
@@ -291,10 +305,33 @@ impl FileBrowser {
         }
     }
 
-    /// Where the home-folder button goes: the app's Documents on Android, the user's home on the
-    /// desktop (where no browser opens — for `resolve`'s `~`).
+    /// The app-storage start (its `Documents` when it exists): the switcher's and the home
+    /// button's target on Android.
+    fn app_start_target(&self) -> Option<PathBuf> {
+        self.roots.as_ref().map(app_start)
+    }
+
+    /// Where the home-folder button goes: the user's home on the desktop; on Android the app
+    /// storage the browser starts in.
     fn home_target(&self) -> Option<PathBuf> {
-        self.roots.as_ref().map(app_start).or_else(home)
+        if self.roots.is_some() {
+            return self.app_start_target();
+        }
+        home()
+    }
+
+    /// The switcher's tap on "Shared storage": `granted` is the host's answer (checked at the
+    /// tap). Enters the shared root when the grant is held; otherwise the browser stays put and
+    /// notes the ask (the caller also asks for the grant).
+    pub(crate) fn open_shared(&mut self, granted: bool) -> bool {
+        let Some(shared) = self.roots.as_ref().and_then(|r| r.shared.clone()) else { return false };
+        if granted {
+            self.navigate(shared);
+            true
+        } else {
+            self.note = Note::Grant;
+            false
+        }
     }
 
     /// OK: a highlighted folder is opened (picked, for a folder pick); otherwise the typed name
@@ -318,9 +355,9 @@ impl FileBrowser {
             return Step::Stay;
         }
         let Some(mut path) = resolve(&self.dir, &self.name) else { return Step::Stay };
-        // Android: a typed pick outside the browser's root (…/, an absolute path) is not one this
-        // dialog may take.
-        if self.roots.as_ref().is_some_and(|r| !inside_root(&path, &r.app)) {
+        // Android: a typed pick outside the browser's roots (…/, an absolute path) is not one
+        // this dialog may take.
+        if self.roots.as_ref().is_some_and(|r| !inside_root(&path, &r.app, r.shared.as_deref())) {
             self.note = Note::NotFound(self.name.trim().to_string());
             return Step::Stay;
         }
@@ -405,7 +442,7 @@ pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
     let mut open = true;
     crate::dialogs::window(&title, ctx).order(egui::Order::Foreground).open(&mut open).show(ctx, |ui| {
         ui.set_width(620.0);
-        done = body(ui, &mut b, &t);
+        done = body(ui, &mut b, &t, app.services.as_ref());
     });
     if !open {
         done = Some(None);
@@ -417,7 +454,7 @@ pub(crate) fn show(app: &mut FigApp, ctx: &egui::Context) {
 }
 
 /// The browser's contents; `Some` once it closes (`Some(None)`: cancelled).
-fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>> {
+fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens, s: &dyn Services) -> Option<Option<PathBuf>> {
     let mut location_done = false;
     ui.horizontal(|ui| {
         if widgets::icon_button(ui, icons::Icon::ChevronUp, tr("Up one level")) {
@@ -438,6 +475,23 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         }
     });
     ui.add_space(4.0);
+    // Android's second root: the switcher between the app-private tree and shared storage,
+    // offered only while the host offers shared storage (the desktop draws nothing here).
+    if let Some(shared) = b.roots.as_ref().and_then(|r| r.shared.clone()) {
+        let in_shared = b.dir.starts_with(&shared);
+        ui.horizontal(|ui| {
+            if ui.selectable_label(!in_shared, tr("App files")).clicked()
+                && in_shared
+                && let Some(start) = b.app_start_target()
+            {
+                b.navigate(start);
+            }
+            if ui.selectable_label(in_shared, tr("Shared storage")).clicked() && !in_shared && !b.open_shared(s.shared_storage_granted()) {
+                s.shared_storage_grant();
+            }
+        });
+        ui.add_space(4.0);
+    }
     let mut pick = false;
     let mut go: Option<PathBuf> = None;
     let mut clicked: Option<Entry> = None;
@@ -494,6 +548,10 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             Some((trf("{name} already exists. Choose Save again to replace it.", &[("name", &name)]), t.danger))
         }
+        (_, Note::Grant) => Some((
+            tr("To browse shared storage, allow FigCraft all-files access in Android's settings, then choose Shared storage again.").to_string(),
+            t.danger,
+        )),
         (Err(e), _) => Some((trf("This folder can't be read: {error}", &[("error", e)]), t.danger)),
         (Ok(l), _) if l.truncated => Some((trf("Showing the first {count} items.", &[("count", &l.entries.len().to_string())]), t.text_secondary)),
         _ => None,
@@ -635,16 +693,70 @@ mod tests {
         assert_eq!(up_from(root, Path::new("/storage/emulated/0")), None);
     }
 
+    /// "Up one level" stays inside the root the browser is in: under shared storage it climbs to
+    /// `/storage/emulated/0` and stops there instead of the app tree's root.
+    #[test]
+    fn up_stops_at_the_root_the_browser_is_in() {
+        let app = Path::new("/data/user/0/ai.storyteller.figcraft/files/FigCraft");
+        let shared = Path::new("/storage/emulated/0");
+        let (send, _rx) = channel();
+        let mut b = FileBrowser::new(
+            open_request(),
+            shared.join("Download"),
+            Some(Roots { app: app.to_path_buf(), shared: Some(shared.to_path_buf()) }),
+            send,
+        );
+        assert_eq!(b.up_target(), Some(shared.to_path_buf()), "shared storage's Download climbs to its own root");
+        b.navigate(shared.to_path_buf());
+        assert_eq!(b.up_target(), None, "shared storage's top has no Up");
+        b.navigate(shared.join("Documents"));
+        assert_eq!(b.up_target(), Some(shared.to_path_buf()));
+    }
+
+    /// The switcher's "Shared storage" tap: it navigates only while the host says the grant is
+    /// held, and otherwise stays put with a note that explains the ask.
+    #[test]
+    fn the_switcher_enters_shared_storage_only_with_the_grant() {
+        let base = scratch("grant");
+        let shared = scratch("grant-shared");
+        std::fs::create_dir_all(base.join("Documents")).unwrap();
+        let (send, _rx) = channel();
+        let mut b = FileBrowser::new(open_request(), base.join("Documents"), Some(Roots { app: base.clone(), shared: Some(shared.clone()) }), send);
+        assert!(!b.open_shared(false), "without the grant the switcher does not navigate");
+        assert_eq!(b.dir, base.join("Documents"), "the browser stays where it was");
+        assert_eq!(b.note, Note::Grant, "the ask explains itself");
+        assert!(b.open_shared(true), "with the grant the switcher enters shared storage");
+        assert_eq!(b.dir, shared);
+        assert_eq!(b.note, Note::None);
+        let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&shared);
+    }
+
+    /// No shared root (a host that offers only the app's storage): the browser has no second root
+    /// to switch to, and the switcher's tap does nothing.
+    #[test]
+    fn no_shared_root_offers_no_second_root() {
+        let base = scratch("no-shared");
+        let (send, _rx) = channel();
+        let mut b = FileBrowser::new(open_request(), base.clone(), Some(Roots { app: base.clone(), shared: None }), send);
+        assert!(!b.open_shared(true), "no shared root: nothing to enter");
+        assert_eq!(b.dir, base);
+        assert_eq!(b.note, Note::None, "no ask without a second root");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
     /// A folder this browser may open is under the root; a path that merely starts with the same
     /// text but is a sibling directory is not inside it.
     #[test]
     fn inside_root_accepts_only_the_roots() {
-        let root = Path::new("/data/user/0/ai.storyteller.figcraft/files/FigCraft");
-        assert!(inside_root(&root.join("Documents"), root));
-        assert!(inside_root(root, root), "the root itself is a folder the browser may show");
-        assert!(!inside_root(Path::new("/data/user/0/ai.storyteller.figcraft/other"), root));
-        assert!(!inside_root(Path::new("/data/user/0/ai.storyteller.figcraft/files/FigCraft-x"), root), "a sibling that shares a prefix");
-        assert!(!inside_root(Path::new("/etc"), root));
+        let app = Path::new("/data/user/0/ai.storyteller.figcraft/files/FigCraft");
+        let shared = Path::new("/storage/emulated/0");
+        assert!(inside_root(&app.join("Documents"), app, None));
+        assert!(inside_root(app, app, None), "the root itself is a folder the browser may show");
+        assert!(!inside_root(Path::new("/data/user/0/ai.storyteller.figcraft/other"), app, None));
+        assert!(!inside_root(Path::new("/data/user/0/ai.storyteller.figcraft/files/FigCraft-x"), app, None), "a sibling that shares a prefix");
+        assert!(inside_root(&shared.join("Download"), app, Some(shared)), "shared storage is a root the host may offer");
+        assert!(!inside_root(Path::new("/etc"), app, Some(shared)));
     }
 
     /// Android (no system dialog, the host's app-private storage recorded): Save as serves the
@@ -653,19 +765,31 @@ mod tests {
     #[test]
     fn app_files_dir_serves_the_pick_in_the_built_in_browser() {
         let base = scratch("android-route");
+        let shared = scratch("android-route-shared");
         std::fs::create_dir_all(base.join("Documents")).unwrap();
-        struct AppFiles(PathBuf);
+        struct AppFiles {
+            app: PathBuf,
+            shared: PathBuf,
+        }
         impl crate::Services for AppFiles {
             fn app_files_dir(&self) -> Option<PathBuf> {
-                Some(self.0.clone())
+                Some(self.app.clone())
+            }
+            fn shared_storage_root(&self) -> Option<PathBuf> {
+                Some(self.shared.clone())
             }
         }
-        let mut app = FigApp::new(Session::empty(), Box::new(AppFiles(base.clone())));
+        let mut app = FigApp::new(Session::empty(), Box::new(AppFiles { app: base.clone(), shared: shared.clone() }));
         app.session.execute("file.new", &json!({})).unwrap();
         app.save_as_dialog();
         {
             let b = app.file_browser.open.as_ref().expect("the built-in browser serves the request");
             assert_eq!(b.roots.as_ref().map(|r| r.app.clone()), Some(base.clone()), "clamped to the host's root");
+            assert_eq!(
+                b.roots.as_ref().and_then(|r| r.shared.clone()),
+                Some(shared.clone()),
+                "the host's shared storage is the browser's second root"
+            );
             assert_eq!(b.dir, base.join("Documents"), "starts in the app's Documents");
             assert_eq!(b.name, "Untitled.figcraft", "the save name pre-fills the field");
         }
@@ -720,21 +844,33 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    /// Navigation is clamped inside the host's root: a typed pick outside is refused as not
-    /// found, a folder jump outside lands on the root's top, and the root's top has no Up.
+    /// Navigation is clamped inside the host's roots: a typed pick under either is taken, one
+    /// outside both is refused as not found, a folder jump outside lands on the top of the root
+    /// the browser is in, and a root's top has no Up.
     #[test]
     fn a_pick_outside_the_root_is_refused_and_clamped() {
         let base = scratch("clamp");
+        let shared = scratch("clamp-shared");
         std::fs::create_dir_all(base.join("Documents")).unwrap();
+        std::fs::create_dir_all(shared.join("Download")).unwrap();
+        std::fs::write(shared.join("out.figcraft"), b"x").unwrap();
         let (send, _rx) = channel();
-        let mut b = FileBrowser::new(open_request(), base.join("Documents"), Some(Roots { app: base.clone() }), send);
+        let mut b = FileBrowser::new(open_request(), base.join("Documents"), Some(Roots { app: base.clone(), shared: Some(shared.clone()) }), send);
         b.name = "/etc/passwd".into();
         assert_eq!(b.accept(), Step::Stay);
-        assert_eq!(b.note, Note::NotFound("/etc/passwd".into()), "outside the root: not found");
+        assert_eq!(b.note, Note::NotFound("/etc/passwd".into()), "outside the roots: not found");
+        b.name = shared.join("out.figcraft").to_string_lossy().into_owned();
+        assert_eq!(b.accept(), Step::Pick(shared.join("out.figcraft")), "a pick under shared storage is taken");
         b.navigate(base.parent().unwrap().to_path_buf());
-        assert_eq!(b.dir, base, "a folder outside the root lands on the root's top");
+        assert_eq!(b.dir, base, "a folder outside the roots lands on the app root's top");
         assert_eq!(b.up_target(), None, "the root's top has no Up");
+        // From shared storage, the same jump lands on shared storage's top, not the app tree's.
+        b.navigate(shared.join("Download"));
+        assert_eq!(b.dir, shared.join("Download"));
+        b.navigate(Path::new("/etc").to_path_buf());
+        assert_eq!(b.dir, shared, "the fallback is the root the browser is in");
         let _ = std::fs::remove_dir_all(&base);
+        let _ = std::fs::remove_dir_all(&shared);
     }
 
     /// A folder pick lists no files and picks the highlighted folder; a double click enters it.

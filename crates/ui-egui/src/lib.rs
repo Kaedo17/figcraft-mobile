@@ -97,6 +97,8 @@ mod canvas_fixes_tests;
 #[cfg(test)]
 mod canvas_image_rect_tests;
 #[cfg(test)]
+mod canvas_touch_tests;
+#[cfg(test)]
 mod clipboard_fence_tests;
 #[cfg(test)]
 mod colorpicker_eyedropper_tests;
@@ -304,9 +306,22 @@ pub trait Services {
     /// browser over this root instead of answering none (cancelled), answering exactly as the
     /// system dialog would. `None` on hosts with a system dialog (desktop) and the web, which
     /// keeps its own flow.
+    /// The app-private folder the built-in browser walks (Android); `None` leaves every pick to
+    /// the host's own dialog machinery.
     fn app_files_dir(&self) -> Option<std::path::PathBuf> {
         None
     }
+    /// Shared storage the browser may offer as its second root (Android's `/storage/emulated/0`);
+    /// `None` on a host that offers none — the desktop draws no switcher, as before.
+    fn shared_storage_root(&self) -> Option<std::path::PathBuf> {
+        None
+    }
+    /// Whether Android's "All files access" grant is held right now (re-checked at every tap).
+    fn shared_storage_granted(&self) -> bool {
+        false
+    }
+    /// Ask for the grant (Android opens its settings page); a host that can't ask does nothing.
+    fn shared_storage_grant(&self) {}
     fn clipboard_set_text(&mut self, _s: &str) {}
     /// Give native services access to the window context for platform clipboard output.
     fn set_egui_context(&mut self, _ctx: &egui::Context) {}
@@ -1654,7 +1669,7 @@ impl FigApp {
         // ([`Self::pick_file`]'s contents and the downloads), hence the gate.
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(request) = request.filter(|_| self.services.app_files_dir().is_some()) {
-            let roots = self.services.app_files_dir().map(|app| file_browser::Roots { app });
+            let roots = self.services.app_files_dir().map(|app| file_browser::Roots { app, shared: self.services.shared_storage_root() });
             let start_dir = self.browser_start(&roots, doc);
             let (pick, browser) = file_browser::open_browser(request, start_dir, roots);
             let window = self.windows.current;

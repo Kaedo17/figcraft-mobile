@@ -65,7 +65,15 @@ code.
 - `figcraft_engine::guard` turns a panicking command into `EngineError::Internal` and the document
   is rolled back; the desktop app also guards each UI frame and writes recovery copies. These are
   safety nets, not substitutes for `Result`.
-- `unsafe_code = "forbid"` workspace-wide.
+- `unsafe_code = "forbid"` workspace-wide. The one exception is
+  `apps/figcraft-android/src/android_access.rs`, the Android entry crate's JNI to the NativeActivity's
+  raw JVM (`JavaVM::from_raw` / `JObject::from_raw` have no safe form): it only *checks* whether
+  Android's "All files access" grant (`MANAGE_EXTERNAL_STORAGE`) is held and *opens* the system page
+  — or, before API 30, the ordinary permission dialog — that grants it, and never reads or writes
+  storage itself. Raw pointers never leave that file: the shared app receives plain closures
+  (`figcraft::SharedStorageAccess`). Every `unsafe` block carries a `// SAFETY:` comment, and every
+  failure degrades to "not granted" / "nothing happened" with at most a log line; the crate keeps the
+  workspace's clippy denials itself.
 - Every crash fix comes with a regression test. The engine has a junk-parameter sweep over every
   command (`crates/engine/src/tests.rs`): extend fuzz/sweep tests when you add parsers or commands.
 

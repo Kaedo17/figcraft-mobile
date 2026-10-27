@@ -29,6 +29,12 @@ pub struct Desktop {
     recovery: crate::recovery::Shared,
     /// The folder of the last file or folder a dialog picked, where the next one starts.
     last_folder: Arc<Mutex<Option<PathBuf>>>,
+    /// Android's shared-storage hooks (`crate::SharedStorageAccess`, built by the entry crate's
+    /// JNI): whether the "All files access" grant holds, and how to ask for it. `None` on the
+    /// desktop and the web (their pickers need no grant) and on Android when the entry crate
+    /// could not reach the JVM — the browser then keeps its app-private root.
+    #[cfg(target_os = "android")]
+    shared_storage: Option<crate::SharedStorageAccess>,
 }
 
 /// Android's resolved app-private storage ([`crate::android_storage::Layout`]; the library's
@@ -99,7 +105,17 @@ impl Desktop {
             language: system_language(),
             recovery,
             last_folder: Arc::default(),
+            #[cfg(target_os = "android")]
+            shared_storage: None,
         }
+    }
+
+    /// Android: the shared-storage hooks the entry crate resolved through JNI — whether the
+    /// "All files access" grant holds and how to ask for it. `None` keeps the browser in
+    /// app-private storage (the desktop never calls this: it has its own pickers).
+    #[cfg(target_os = "android")]
+    pub fn set_shared_storage(&mut self, access: Option<crate::SharedStorageAccess>) {
+        self.shared_storage = access;
     }
 
     /// winit reports no system theme on Linux and the BSDs: there the freedesktop colour scheme
@@ -483,6 +499,28 @@ impl Services for Desktop {
     #[cfg(target_os = "android")]
     fn app_files_dir(&self) -> Option<PathBuf> {
         android_config_dir()
+    }
+    /// Android: shared internal storage as the browser's second root (the switcher's "Shared
+    /// storage"), offered whether or not the grant holds — a tap without it opens the system page
+    /// that grants it. The desktop draws no switcher.
+    #[cfg(target_os = "android")]
+    fn shared_storage_root(&self) -> Option<PathBuf> {
+        Some(PathBuf::from(crate::android_storage::SHARED_ROOT))
+    }
+    /// Android: whether `MANAGE_EXTERNAL_STORAGE` (or, on Android 9, the legacy storage grant) is
+    /// held right now, asked of the JVM at every tap so a grant made in the settings page is seen
+    /// the moment the user comes back.
+    #[cfg(target_os = "android")]
+    fn shared_storage_granted(&self) -> bool {
+        self.shared_storage.as_ref().is_some_and(|a| (a.granted)())
+    }
+    /// Android: open this app's "All files access" settings page (or the runtime permission
+    /// dialog before API 30). Without the hooks (no JVM) nothing can be asked.
+    #[cfg(target_os = "android")]
+    fn shared_storage_grant(&self) {
+        if let Some(a) = &self.shared_storage {
+            (a.ask)();
+        }
     }
     fn clipboard_set_text(&mut self, s: &str) {
         if let Some(ctx) = &self.egui_ctx {

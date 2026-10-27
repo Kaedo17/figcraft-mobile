@@ -86,10 +86,19 @@ A host with no system file picker tells the app where its files live through `Se
 As, Export, Import, Place image, Choose image, Add library, plugin and variables files and folder
 picks — is served by the built-in [`file_browser`](../crates/ui-egui/src/file_browser.rs), which
 answers exactly as the system dialog would. The browser's navigation is clamped inside the host's
-root: *Up one level* stops at the root's top, the home-folder button goes to the app's `Documents`
-folder, a typed pick outside the root is refused as not found, and a folder outside the root lands
-on the root's top. A host with a system picker (desktop) sets nothing and keeps its dialogs — byte
-for byte as before; the web keeps its own flow.
+roots: *Up one level* stops at the top of the root being browsed, the home-folder button goes to
+the app's `Documents` folder, a typed pick outside the roots is refused as not found, and a folder
+outside the roots lands on the top of the root the browser is in. A host with a system picker
+(desktop) sets nothing and keeps its dialogs — byte for byte as before; the web keeps its own flow.
+
+A host may offer a second root (`shared_storage_root`) — Android's shared internal storage
+(`/storage/emulated/0`) — drawn as a switcher between "App files" and "Shared storage". Entering it
+needs Android's "All files access" grant, which an app can never hold silently: `shared_storage_granted`
+re-checks it at every tap, and a tap without it calls `shared_storage_grant` (the system settings
+page that toggles it) and notes what to do. The grant hooks come from `apps/figcraft-android`'s
+`android_access.rs`, the entry crate's JNI to the activity's JVM — the workspace's one `unsafe`
+exception, passed to the app as plain closures (`figcraft::SharedStorageAccess`). Nothing else
+changes: the desktop sets no shared root, so no switcher is drawn.
 
 The Android build splits its app-private data directory once (`apps/figcraft/src/android_storage.rs`):
 
@@ -97,6 +106,7 @@ The Android build splits its app-private data directory once (`apps/figcraft/src
 <files>/FigCraft/           the app's folder — the config root: preferences, the recovery copies
                             and the installed plugins (unchanged from the groundwork step)
 <files>/FigCraft/Documents/ where the browser starts and saves land
+/storage/emulated/0/        the second root, behind the "All files access" grant
 ```
 
 ## Robustness
@@ -110,6 +120,7 @@ input.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | Android: shared internal storage is the file browser's second root, behind Android's "All files access" grant (checked and asked for over the entry crate's JNI, `apps/figcraft-android/src/android_access.rs`); a finger on the canvas background pans the view while a press on a layer stays the tool's |
 | 2026-10-26 | minor | Android: `Services::app_files_dir` serves every file command in the new built-in file browser, clamped to the app's storage (shared storage waits for the grant hooks); the app-private storage splits into the app folder (the config root) and its `Documents/` |
 | 2026-10-26 | minor | Android groundwork: `apps/figcraft` is a library (`figcraft::run`/`run_android`) with the desktop binary as a shim, and `apps/figcraft-android` is the NativeActivity entry crate whose app-private storage resolves the config folder |
 | 2026-10-11 | minor | `collab-net` hosts through one hub for the app's sessions and the standalone server; added the `figcraft-server` app |
