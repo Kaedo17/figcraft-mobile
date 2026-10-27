@@ -175,6 +175,11 @@ fn run_inner(#[cfg(target_os = "android")] android_app: Option<android_activity:
         std::process::exit(i32::from(result.is_err()));
     }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+    // Android: resolve the app-private storage once, before anything reads the config folder —
+    // preferences, recovery copies and installed plugins all hang off it. Desktop keeps its
+    // environment resolution (`services::config_dir`).
+    #[cfg(target_os = "android")]
+    let _ = services::ANDROID_CONFIG_DIR.set(android_app.as_ref().and_then(|app| app.internal_data_path().map(|p| p.to_path_buf())));
     // Android has no command line: the phone's launch is the default one — no control server, no
     // automation roots, no files to open and no invite links.
     #[cfg(target_os = "android")]

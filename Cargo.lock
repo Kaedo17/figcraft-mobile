@@ -1532,6 +1532,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "figcraft-android"
+version = "0.11.2"
+dependencies = [
+ "android-activity",
+ "figcraft",
+ "log",
+]
+
+[[package]]
 name = "figcraft-cli"
 version = "0.11.2"
 dependencies = [

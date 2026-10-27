@@ -1,0 +1,60 @@
+[package]
+name = "figcraft-android"
+description = "FigCraft's Android entry point: the NativeActivity android_main trampoline that opens the shared app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+# NativeActivity loads this library and calls its android_main.
+crate-type = ["cdylib"]
+
+# This crate deliberately does not inherit the workspace lints. Android's NativeActivity ABI
+# requires an unmangled android_main export, and on edition 2024 that spelling
+# (`#[unsafe(no_mangle)]`) trips rust's `unsafe_code` lint, which the workspace forbids — there is
+# no safe spelling of a required export symbol. It therefore sets the workspace's *clippy* denials
+# itself (every one of them) and leaves `unsafe_code` alone. The shared app it opens keeps the
+# workspace lints unchanged.
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unimplemented = "deny"
+todo = "deny"
+unreachable = "deny"
+
+[dependencies]
+figcraft = { path = "../figcraft" }
+log = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# The NativeActivity handle the app's event loop needs; the same 0.6 instance eframe and winit
+# use, so the handle passes across crates as one type.
+android-activity = { version = "0.6", default-features = false, features = ["native-activity"] }
+
+[package.metadata.android]
+package = "ai.storyteller.figcraft"
+apk_name = "figcraft"
+build_targets = ["aarch64-linux-android"]
+
+[package.metadata.android.sdk]
+min_sdk_version = 28
+target_sdk_version = 35
+
+[package.metadata.android.application]
+label = "FigCraft"
+theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+
+[package.metadata.android.application.activity]
+# Every configuration change the activity handles itself instead of a restart (the same list the
+# other Craft apps' Android builds use): the window, the documents and the app survive rotating
+# the device, folding and unfolding it, a theme switch, a font-scale change, a different keyboard
+# or locale.
+config_changes = "orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|density|layoutDirection|uiMode|fontScale|keyboard|navigation|touchscreen|locale|mcc|mnc|colorMode"
+label = "FigCraft"
+launch_mode = "singleTask"
+# The canvas fills the screen; like the other Craft apps' canvas builds (FilmCraft, PhotoCraft)
+# this one pins landscape, where a design canvas has the room it wants.
+orientation = "landscape"
+exported = true

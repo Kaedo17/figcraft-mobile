@@ -31,12 +31,28 @@ pub struct Desktop {
     last_folder: Arc<Mutex<Option<PathBuf>>>,
 }
 
+/// Android's resolved config folder (the activity's app-private storage; the library's `run_inner`
+/// sets it before anything reads it), `None` until then and when the activity offers no path.
+#[cfg(target_os = "android")]
+pub(crate) static ANDROID_CONFIG_DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+
+/// Android's config folder: `Some` once [`run_inner`](crate) resolved the app-private storage,
+/// `None` when there is none.
+#[cfg(target_os = "android")]
+fn android_config_dir() -> Option<PathBuf> {
+    ANDROID_CONFIG_DIR.get().unwrap_or(&None).clone()
+}
+
 pub fn config_dir() -> Option<PathBuf> {
+    // Android resolves the app-private storage at start-up; the environment below has no meaning
+    // there (`HOME` and `XDG_CONFIG_HOME` are unset).
+    #[cfg(target_os = "android")]
+    let base = android_config_dir();
     #[cfg(target_os = "macos")]
     let base = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"));
     #[cfg(target_os = "windows")]
     let base = std::env::var_os("APPDATA").map(PathBuf::from);
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
     let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
     base.map(|b| b.join("FigCraft"))
 }
