@@ -120,6 +120,10 @@ impl eframe::App for App {
     }
 
     fn raw_input_hook(&mut self, _ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        // Android: winit's backend never emits `ModifiersChanged`, so shortcuts and the
+        // wheel/click modifiers egui-winit fills would all see an empty state.
+        #[cfg(target_os = "android")]
+        with_app(|fig| fig.stamp_android_modifiers(&mut raw_input.events));
         // Pointer and key events sent over the control channel (`ui.input`), for the window
         // about to draw.
         if let Some(events) = with_app(|fig| figcraft_ui_egui::windows::take_input(fig, raw_input.viewport_id)) {
