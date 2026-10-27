@@ -1,6 +1,6 @@
 # FigCraft architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (Android groundwork: the app is a library and `figcraft-android` is the NativeActivity entry crate; previously minor: the shared hub in `collab-net` and the `figcraft-server` app) · **Target:** Figma Design
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-26 · **Change:** minor (Android: the built-in file browser serves every file command over the app's storage; previously minor: Android groundwork: the app is a library and `figcraft-android` is the NativeActivity entry crate) · **Target:** Figma Design
 
 How FigCraft is built today. Engine first, a thin swappable UI, everything a command; a Figma-shaped
 data model (a scene graph of frames with auto layout, components and variables). ~108,800 lines of
@@ -79,6 +79,26 @@ file JSON with variables and images, SVG, raster images, clipboard
 content. Exports: PNG, JPG, WebP, SVG, PDF, code. There is no `.fig` reader yet
 ([`file-format-parity.md`](file-format-parity.md)).
 
+## Host-provided storage (Android)
+
+A host with no system file picker tells the app where its files live through `Services`
+(`app_files_dir`) instead of a `cfg` in the dialogs: with it set, every file command — Open, Save
+As, Export, Import, Place image, Choose image, Add library, plugin and variables files and folder
+picks — is served by the built-in [`file_browser`](../crates/ui-egui/src/file_browser.rs), which
+answers exactly as the system dialog would. The browser's navigation is clamped inside the host's
+root: *Up one level* stops at the root's top, the home-folder button goes to the app's `Documents`
+folder, a typed pick outside the root is refused as not found, and a folder outside the root lands
+on the root's top. A host with a system picker (desktop) sets nothing and keeps its dialogs — byte
+for byte as before; the web keeps its own flow.
+
+The Android build splits its app-private data directory once (`apps/figcraft/src/android_storage.rs`):
+
+```text
+<files>/FigCraft/           the app's folder — the config root: preferences, the recovery copies
+                            and the installed plugins (unchanged from the groundwork step)
+<files>/FigCraft/Documents/ where the browser starts and saves land
+```
+
 ## Robustness
 
 Workspace lints deny `unwrap`, `expect`, `panic!` and friends in shipped code; `unsafe_code` is
@@ -90,6 +110,7 @@ input.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Android: `Services::app_files_dir` serves every file command in the new built-in file browser, clamped to the app's storage (shared storage waits for the grant hooks); the app-private storage splits into the app folder (the config root) and its `Documents/` |
 | 2026-10-26 | minor | Android groundwork: `apps/figcraft` is a library (`figcraft::run`/`run_android`) with the desktop binary as a shim, and `apps/figcraft-android` is the NativeActivity entry crate whose app-private storage resolves the config folder |
 | 2026-10-11 | minor | `collab-net` hosts through one hub for the app's sessions and the standalone server; added the `figcraft-server` app |
 | 2026-10-10 | minor | Merged main after #101–#103: WASM plugins (plugins area 0% → 35% breadth, 20% ready; ecosystem 5% → 20%) and the multiplayer core without networking (multiplayer 5% → 15% breadth, 5% ready; collaboration 8% → 12%); menu breadth 97.5% → 98.5% (200/203); ready for real work ~46% → ~47%; full parity 420–790 h → 390–745 h; beta 210–380 h → 200–365 h. Fixed the stated weight sums (areas 1–16 sum to 94, total 113; percentages were already computed with those) |

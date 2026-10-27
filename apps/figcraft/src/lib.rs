@@ -30,6 +30,7 @@
 #[cfg(all(target_os = "windows", target_env = "gnu", not(windows_slim_errors)))]
 compile_error!("Windows GNU builds must set windows_slim_errors to keep UI Automation responsive");
 
+mod android_storage;
 #[cfg(target_os = "macos")]
 mod apple_events;
 mod args;
@@ -175,11 +176,21 @@ fn run_inner(#[cfg(target_os = "android")] android_app: Option<android_activity:
         std::process::exit(i32::from(result.is_err()));
     }
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
-    // Android: resolve the app-private storage once, before anything reads the config folder —
-    // preferences, recovery copies and installed plugins all hang off it. Desktop keeps its
-    // environment resolution (`services::config_dir`).
+    // Android: split the app-private storage once, before anything reads the config folder —
+    // preferences, the recovery copies and the installed plugins hang off the app's folder, and
+    // the in-app browser walks it (its Documents folder, created here with a warning — not a
+    // crash — when that fails). Desktop keeps its environment resolution (`services::config_dir`).
     #[cfg(target_os = "android")]
-    let _ = services::ANDROID_CONFIG_DIR.set(android_app.as_ref().and_then(|app| app.internal_data_path().map(|p| p.to_path_buf())));
+    {
+        let layout = android_app.as_ref().and_then(|app| app.internal_data_path().as_deref().map(android_storage::layout));
+        let _ = services::ANDROID_STORAGE.set(layout.clone());
+        if let Some(l) = layout.as_ref() {
+            match android_storage::ensure(l) {
+                Ok(()) => log::info!("android storage: {}", l.base.display()),
+                Err(e) => log::warn!("android storage: {e}"),
+            }
+        }
+    }
     // Android has no command line: the phone's launch is the default one — no control server, no
     // automation roots, no files to open and no invite links.
     #[cfg(target_os = "android")]

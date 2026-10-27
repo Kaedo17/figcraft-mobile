@@ -64,6 +64,8 @@ icons! {
     Cut,
     Boolean,
     Page,
+    /// A folder: its front with the tab folded over at the left.
+    Folder,
     Check,
     Close,
     /// Window buttons: minimise, maximise, restore.
@@ -669,6 +671,7 @@ fn draw(p: &P, icon: Icon) {
             p.poly(&[(3.5, 2.5), (9.5, 2.5), (12.5, 5.5), (12.5, 13.5), (3.5, 13.5)], true);
             p.poly(&[(9.5, 2.5), (9.5, 5.5), (12.5, 5.5)], false);
         }
+        Folder => p.poly(&[(2.5, 4.5), (6.5, 4.5), (7.5, 6.5), (13.5, 6.5), (13.5, 12.5), (2.5, 12.5)], true),
         Check => p.poly(&[(3.0, 8.5), (6.5, 12.0), (13.0, 4.5)], false),
         Close => {
             p.line(4.0, 4.0, 12.0, 12.0);

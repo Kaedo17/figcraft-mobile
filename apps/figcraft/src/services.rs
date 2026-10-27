@@ -31,30 +31,38 @@ pub struct Desktop {
     last_folder: Arc<Mutex<Option<PathBuf>>>,
 }
 
-/// Android's resolved config folder (the activity's app-private storage; the library's `run_inner`
-/// sets it before anything reads it), `None` until then and when the activity offers no path.
+/// Android's resolved app-private storage ([`crate::android_storage::Layout`]; the library's
+/// `run_inner` sets it before anything reads it), `None` until then and when the activity offers
+/// no path.
 #[cfg(target_os = "android")]
-pub(crate) static ANDROID_CONFIG_DIR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+pub(crate) static ANDROID_STORAGE: std::sync::OnceLock<Option<crate::android_storage::Layout>> = std::sync::OnceLock::new();
 
-/// Android's config folder: `Some` once [`run_inner`](crate) resolved the app-private storage,
-/// `None` when there is none.
+/// Android's config folder: the app's folder below the app-private storage, `Some` once
+/// [`run_inner`](crate) resolved it, `None` when there is none.
 #[cfg(target_os = "android")]
 fn android_config_dir() -> Option<PathBuf> {
-    ANDROID_CONFIG_DIR.get().unwrap_or(&None).clone()
+    ANDROID_STORAGE.get().and_then(|l| l.as_ref()).map(|l| l.base.clone())
 }
 
 pub fn config_dir() -> Option<PathBuf> {
-    // Android resolves the app-private storage at start-up; the environment below has no meaning
-    // there (`HOME` and `XDG_CONFIG_HOME` are unset).
+    // Android resolves the app-private storage at start-up: the app's folder below the data
+    // directory IS the config root (no environment applies there — `HOME` and
+    // `XDG_CONFIG_HOME` are unset — and no further join: its Documents folder for the in-app
+    // browser sits beside it).
     #[cfg(target_os = "android")]
-    let base = android_config_dir();
-    #[cfg(target_os = "macos")]
-    let base = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"));
-    #[cfg(target_os = "windows")]
-    let base = std::env::var_os("APPDATA").map(PathBuf::from);
-    #[cfg(all(unix, not(target_os = "macos"), not(target_os = "android")))]
-    let base = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
-    base.map(|b| b.join("FigCraft"))
+    return android_config_dir();
+
+    #[cfg(not(target_os = "android"))]
+    {
+        #[cfg(target_os = "macos")]
+        let base = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support"));
+        #[cfg(target_os = "windows")]
+        let base = std::env::var_os("APPDATA").map(PathBuf::from);
+        #[cfg(all(unix, not(target_os = "macos")))]
+        let base =
+            std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")));
+        base.map(|b| b.join("FigCraft"))
+    }
 }
 
 impl Desktop {
@@ -467,6 +475,14 @@ impl Services for Desktop {
         #[cfg(not(target_os = "android"))]
         let pick = picked(self.dialog_in_last_folder(title).pick_folder());
         remembering(self.last_folder.clone(), pick, true)
+    }
+    /// Android: the built-in browser walks the app's folder below the app-private storage — the
+    /// config root (`android_config_dir`): the browser starts in its `Documents` folder
+    /// (`app_start`) and may reach the whole tree, *Up one level* stopping at this root's top.
+    /// Desktop keeps the system dialogs and offers no root.
+    #[cfg(target_os = "android")]
+    fn app_files_dir(&self) -> Option<PathBuf> {
+        android_config_dir()
     }
     fn clipboard_set_text(&mut self, s: &str) {
         if let Some(ctx) = &self.egui_ctx {

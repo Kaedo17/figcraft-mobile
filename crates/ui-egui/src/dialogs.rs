@@ -148,6 +148,13 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
     if egui::Popup::is_any_open(ctx) {
         return;
     }
+    // The built-in browser (a pending pick on a host with no system dialog) is the topmost
+    // dialog: its Escape closes it first, whatever app dialogs are open below. (Before the `u`
+    // borrow: cancelling takes the whole app.)
+    if app.file_browser.open.is_some() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        crate::file_browser::cancel(app);
+        return;
+    }
     let u = &mut app.ui;
     let open = u.color_profile.is_some()
         || u.menu_input.is_some()
@@ -179,7 +186,8 @@ pub fn keys(app: &mut FigApp, ctx: &Context) {
     }
 }
 
-/// Draw the app's dialogs and cards: pending opens/imports/missing fonts, About,
+/// Draw the app's dialogs and cards: pending opens/imports/missing fonts, the built-in file
+/// browser (a pending pick on a host with no system dialog), About,
 /// Preferences, shortcuts, find/replace, batch rename, menu input, variables, dev compare,
 /// branch, export preview, colour profile, plugin, live join/publish, online dialogs and
 /// close confirmation.
@@ -188,6 +196,7 @@ pub fn show(app: &mut FigApp, ctx: &Context) {
     crate::pending_open::pending_opens(app, ctx);
     crate::import_report::show(app, ctx);
     crate::missing_fonts::show(app, ctx);
+    crate::file_browser::show(app, ctx);
     let t = Tokens::get(ctx);
     if app.ui.about {
         let mut open = true;

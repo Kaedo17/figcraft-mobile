@@ -25,6 +25,7 @@ pub mod dev_mode;
 pub mod dialogs;
 pub mod export_panel;
 pub mod field_math;
+pub mod file_browser;
 pub mod font_preview;
 pub mod frame_labels;
 pub mod frame_presets;
@@ -297,6 +298,14 @@ pub trait Services {
     /// A folder to write several files into.
     fn pick_folder(&mut self, _title: &str) -> DialogFuture {
         Box::pin(std::future::ready(None))
+    }
+    /// Android (and any host with no system file dialog): the app-private directory the built-in
+    /// [`file_browser`](crate::file_browser) may reach. When set, every pick is served in the
+    /// browser over this root instead of answering none (cancelled), answering exactly as the
+    /// system dialog would. `None` on hosts with a system dialog (desktop) and the web, which
+    /// keeps its own flow.
+    fn app_files_dir(&self) -> Option<std::path::PathBuf> {
+        None
     }
     fn clipboard_set_text(&mut self, _s: &str) {}
     /// Give native services access to the window context for platform clipboard output.
@@ -936,6 +945,8 @@ pub struct FigApp {
     waiting: Vec<(String, Done)>,
     /// Native dialogs complete asynchronously so their modal event loop never re-enters winit.
     pending_dialog: Option<PendingDialog>,
+    /// The built-in browser serving a pending dialog (a host with no system file dialog, Android).
+    pub(crate) file_browser: file_browser::State,
     /// The latest UI context schedules the first poll and wakes the app when a dialog completes.
     ui_context: Option<egui::Context>,
     /// The automation roots the app was started with: every frame and control request runs
@@ -1006,6 +1017,7 @@ impl FigApp {
             window_requests: Vec::new(),
             waiting: Vec::new(),
             pending_dialog: None,
+            file_browser: file_browser::State::default(),
             ui_context: None,
             automation_roots: None,
             control_input_doc: None,
@@ -1540,6 +1552,7 @@ impl FigApp {
     /// path, or the name and contents where the platform has no paths). `pin`: as
     /// [`FigApp::pick_open`]'s file in front.
     fn pick_file(&mut self, title: &str, exts: &[&str], pin: bool, done: impl FnOnce(&mut FigApp, Value) + 'static) {
+        let request = file_browser::BrowserRequest::Open { title: title.to_string(), exts: exts.iter().map(|e| e.to_string()).collect() };
         self.start_pick(
             |services| -> PickFuture {
                 match services.pick_open_contents(title, exts) {
@@ -1552,6 +1565,7 @@ impl FigApp {
                     }
                 }
             },
+            Some(request),
             pin,
             move |app, picked| match picked.file_params() {
                 Ok(file) => done(app, file),
@@ -1563,12 +1577,18 @@ impl FigApp {
     /// Pick a file to open. `done` runs with the file in front now back in front (and not at all
     /// if that file closed meanwhile).
     pub fn pick_open(&mut self, title: &str, exts: &[&str], done: impl FnOnce(&mut FigApp, PathBuf) + 'static) {
-        self.start_dialog(|services| services.pick_open(title, exts), true, done);
+        let request = file_browser::BrowserRequest::Open { title: title.to_string(), exts: exts.iter().map(|e| e.to_string()).collect() };
+        self.start_dialog(Some(request), |services| services.pick_open(title, exts), true, done);
     }
 
     /// Pick where to save; `done` runs as [`FigApp::pick_open`]'s does.
     pub fn pick_save(&mut self, title: &str, name: &str, exts: &[&str], done: impl FnOnce(&mut FigApp, PathBuf) + 'static) {
-        self.start_dialog(|services| services.pick_save(title, name, exts), true, done);
+        let request = file_browser::BrowserRequest::Save {
+            title: title.to_string(),
+            name: name.to_string(),
+            exts: exts.iter().map(|e| e.to_string()).collect(),
+        };
+        self.start_dialog(Some(request), |services| services.pick_save(title, name, exts), true, done);
     }
 
     /// Hand a command result's base64 `data` over as a download named `name`, where the platform
@@ -1585,16 +1605,28 @@ impl FigApp {
 
     /// Pick a folder; `done` runs as [`FigApp::pick_open`]'s does.
     pub fn pick_folder(&mut self, title: &str, done: impl FnOnce(&mut FigApp, PathBuf) + 'static) {
-        self.start_dialog(|services| services.pick_folder(title), true, done);
+        self.start_dialog(
+            Some(file_browser::BrowserRequest::Folder { title: title.to_string() }),
+            |services| services.pick_folder(title),
+            true,
+            done,
+        );
     }
 
     /// Open a native dialog from the window drawing now, for the file in front (`pin`).
-    fn start_dialog(&mut self, start: impl FnOnce(&mut dyn Services) -> DialogFuture, pin: bool, done: impl FnOnce(&mut FigApp, PathBuf) + 'static) {
+    fn start_dialog(
+        &mut self,
+        request: Option<file_browser::BrowserRequest>,
+        start: impl FnOnce(&mut dyn Services) -> DialogFuture,
+        pin: bool,
+        done: impl FnOnce(&mut FigApp, PathBuf) + 'static,
+    ) {
         self.start_pick(
             |services| -> PickFuture {
                 let pick = start(services);
                 Box::pin(async move { pick.await.map(Picked::Path) })
             },
+            request,
             pin,
             move |app, picked| {
                 if let Picked::Path(p) = picked {
@@ -1605,16 +1637,57 @@ impl FigApp {
     }
 
     /// [`FigApp::start_dialog`] for any kind of pick.
-    fn start_pick(&mut self, start: impl FnOnce(&mut dyn Services) -> PickFuture, pin: bool, done: impl FnOnce(&mut FigApp, Picked) + 'static) {
+    fn start_pick(
+        &mut self,
+        start: impl FnOnce(&mut dyn Services) -> PickFuture,
+        request: Option<file_browser::BrowserRequest>,
+        pin: bool,
+        done: impl FnOnce(&mut FigApp, Picked) + 'static,
+    ) {
         if self.pending_dialog.is_some() {
             return;
         }
         let doc = if pin { self.session.ds().ok().filter(|d| self.shows(d.uid)).map(|d| d.uid) } else { None };
+        // A host with no system file dialog (Android) that offers its app-private storage serves
+        // the request in the built-in browser over that storage, answering exactly as the system
+        // dialog would. The browser is a native feature; the web keeps its own flow
+        // ([`Self::pick_file`]'s contents and the downloads), hence the gate.
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(request) = request.filter(|_| self.services.app_files_dir().is_some()) {
+            let roots = self.services.app_files_dir().map(|app| file_browser::Roots { app });
+            let start_dir = self.browser_start(&roots, doc);
+            let (pick, browser) = file_browser::open_browser(request, start_dir, roots);
+            let window = self.windows.current;
+            self.file_browser.open = Some(browser);
+            self.pending_dialog = Some(PendingDialog { future: Box::pin(pick), picked: None, done: Box::new(done), doc, window });
+            if let Some(ctx) = &self.ui_context {
+                ctx.request_repaint();
+            }
+            return;
+        }
         let future = start(self.services.as_mut());
         self.pending_dialog = Some(PendingDialog { future, picked: None, done: Box::new(done), doc, window: self.windows.current });
         if let Some(ctx) = &self.ui_context {
             ctx.request_repaint();
         }
+    }
+
+    /// Where the browser opens: the folder it showed last, else the pending file's folder, else
+    /// the app's Documents (its root when that failed) — each only when it still exists.
+    fn browser_start(&self, roots: &Option<file_browser::Roots>, doc: Option<u64>) -> PathBuf {
+        self.file_browser
+            .last_dir
+            .clone()
+            .filter(|d| d.is_dir())
+            .or_else(|| {
+                doc.and_then(|u| self.session.docs.iter().find(|d| d.uid == u))
+                    .and_then(|d| d.path.as_deref())
+                    .and_then(|p| Path::new(p).parent())
+                    .map(Path::to_path_buf)
+                    .filter(|d| d.is_dir())
+            })
+            .or_else(|| roots.as_ref().map(file_browser::app_start).filter(|d| d.is_dir()))
+            .unwrap_or_else(|| PathBuf::from("/"))
     }
 
     /// Once the dialog has a path, its continuation runs in the window that holds its file, with
