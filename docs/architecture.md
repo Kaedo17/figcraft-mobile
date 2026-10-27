@@ -120,6 +120,7 @@ input.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | Android: vendored winit (storytold/winit rev a517b3846) with mouse/trackpad pointer routing; `stamp_android_modifiers` in `crates/ui-egui` tracks Ctrl/Shift/Alt and stamps each frame's events; 50% interface size preset; contributor entry; all Part 1–6 Android work complete and device-tested |
 | 2026-10-27 | minor | Android: shared internal storage is the file browser's second root, behind Android's "All files access" grant (checked and asked for over the entry crate's JNI, `apps/figcraft-android/src/android_access.rs`); a finger on the canvas background pans the view while a press on a layer stays the tool's |
 | 2026-10-26 | minor | Android: `Services::app_files_dir` serves every file command in the new built-in file browser, clamped to the app's storage (shared storage waits for the grant hooks); the app-private storage splits into the app folder (the config root) and its `Documents/` |
 | 2026-10-26 | minor | Android groundwork: `apps/figcraft` is a library (`figcraft::run`/`run_android`) with the desktop binary as a shim, and `apps/figcraft-android` is the NativeActivity entry crate whose app-private storage resolves the config folder |

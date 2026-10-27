@@ -48,7 +48,9 @@ pub fn percent(scale: f32) -> u32 {
 }
 
 /// The sizes Preferences offers, relative to the system's scale (`pref.uiScale` takes up to 3).
-pub const SIZES: [f64; 8] = [0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0];
+/// 50 % is included for small tablets and phones in landscape (PhotoCraft's and FilmCraft's
+/// ladders start there for the same reason).
+pub const SIZES: [f64; 9] = [0.5, 0.75, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0];
 
 #[cfg(test)]
 mod tests {

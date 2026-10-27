@@ -196,12 +196,12 @@ fn the_interface_size_menu_works_from_the_keyboard() {
     assert!(u.app.ui.preferences, "the first Escape closes the menu only");
     assert_eq!(chosen(&u), json!(1.0));
 
-    // The arrows enter the menu on its first size and go down through the sizes (75, 90, 100, 110,
-    // 125); Enter picks the one that has the keyboard and closes the menu.
+    // The arrows enter the menu on its first size and go down through the sizes (50, 75, 90, 100,
+    // 110, 125); Enter picks the one that has the keyboard and closes the menu.
     open(&mut u);
     press(&mut u, Key::ArrowDown);
-    assert_eq!(focused_name(&u.ctx), "75%");
-    for _ in 0..4 {
+    assert_eq!(focused_name(&u.ctx), "50%");
+    for _ in 0..5 {
         press(&mut u, Key::ArrowDown);
     }
     assert_eq!(focused_name(&u.ctx), "125%");

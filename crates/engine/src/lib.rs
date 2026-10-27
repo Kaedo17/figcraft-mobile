@@ -611,7 +611,7 @@ impl DocState {
 
 /// The smallest and largest interface size, relative to the system's display scale (1.0 is the
 /// system's own size).
-pub const UI_SCALE_MIN: f64 = 0.75;
+pub const UI_SCALE_MIN: f64 = 0.5;
 pub const UI_SCALE_MAX: f64 = 3.0;
 
 /// `scale` kept between [`UI_SCALE_MIN`] and [`UI_SCALE_MAX`]; not a finite number: `None`.

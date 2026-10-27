@@ -38,6 +38,7 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 | 22 | Screen readers never run; browser has no accessibility tree | UI/UX | 4–8 | [ui-parity](ui-parity.md) |
 | 23 | CMYK output intent for print PDFs | File format | 2–4 | [file-format-parity](file-format-parity.md) |
 | 24 | Boards: the whiteboard tail (widgets, mind maps, waypoints…) | Feature | 20–44 | [boards-parity](boards-parity.md) |
+| 25 | Android ARM64 port: native app with in-app file browser, shared storage grant, touch/keyboard UX complete; release signing and store packaging not done, no hardware codecs, clipboard text only, single-instance forwarding not available | Platforms | 10–20 | [hardware-parity](hardware-parity.md) |
 
 ## Entries
 
@@ -512,6 +513,14 @@ No alpha blockers: the alpha gate in [`roadmap.md`](roadmap.md#alpha-gate) passe
 - **User impact:** boards cover a brainstorm, a retrospective, a flow sketch and a timed, voted
   workshop round.
 - **Estimate:** 20–44 h.
+
+### 25. Android ARM64 port
+- **Landed (2026-10-27, Parts 1–5):** the app is a library (`figcraft::run`/`run_android`) with the desktop binary as a shim; `apps/figcraft-android` is the NativeActivity entry crate (`cdylib`, `android_main`) with exhaustive `configChanges` and landscape orientation. App-private storage resolves to `files/FigCraft` (config, recovery, plugins); `Services::app_files_dir` serves every file command through the in-app file browser (location field with Up/Home, folder-first listing, type filter, name field, OK/Cancel, notes). Shared storage is a second browser root at `/storage/emulated/0`, behind Android's "All files access" grant (`MANAGE_EXTERNAL_STORAGE`); the entry crate's JNI (`android_access.rs`, the workspace's one `unsafe` block) checks the grant and opens the system settings page; the browser re-checks on every visit and shows a switcher (App files / Shared storage). Touch: finger drag on canvas background pans; press on a layer keeps the tool's gesture; still hold opens the long-press menu without clearing selection; two-finger pan/pinch unchanged. Keyboard: `stamp_android_modifiers` tracks Ctrl/Shift/Alt from key events, stamps each frame's events, announces end state with `ModifiersChanged`; Ctrl mirrors into Command. Vendored `winit` (storytold/winit rev `a517b3846`) adds mouse/trackpad pointer routing (`MouseWheel`, `MouseInput`, `CursorMoved/Entered/Left`).
+- **Landed (2026-10-27, Part 6):** 50% interface size preset added to Preferences ▸ General (PhotoCraft's and FilmCraft's ladders start at 50% for the same reason; a 1600×2560 tablet runs at ~186% natively). Contributor entry for the port author.
+- **Missing:** release keystore creation, `cargo apk build --release` with signed APK, Google Play / F-Droid packaging, in-app update check, hardware video codecs (MediaCodec), image paste (`arboard` has no Android backend), system file/message dialogs (in-app browser replaces them by design), single-instance forwarding (no IPC backend).
+- **Evidence:** `cargo fmt --all`, `cargo clippy -p figcraft-ui-egui -p figcraft -- -D warnings`, `cargo test -p figcraft-ui-egui --lib` (825/0), `cargo test -p figcraft --lib` (61/0), `cargo xtask layers`, `cargo xtask wasm`, `cargo check --target aarch64-linux-android`, `cargo apk build -p figcraft-android` all pass. Device-tested on Galaxy Tab S11 (SM-X736B, Android 16, arm64-v8a): fresh launch, save/open in app-private Documents, shared storage grant opens settings and browses `/storage/emulated/0`, Ctrl+Z/Ctrl+S/Shift+0 chords work, Bluetooth mouse hover/wheel/right-click work, finger pans canvas, long-press menu keeps selection, 50% UI scale rescales live.
+- **Impact:** FigCraft runs natively on Android with full file and touch/keyboard support; the remaining work is store packaging and platform niceties.
+- **Estimate:** 10–20 h (release signing, store packaging, hardware codecs if desired).
 
 ## Revision history
 

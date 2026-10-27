@@ -21,7 +21,7 @@
 
 <p align="center">
   <img alt="100% Rust" src="https://img.shields.io/badge/100%25-Rust-b7410e?style=flat-square&logo=rust">
-  <img alt="macOS · Windows · Linux · FreeBSD · Web" src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20FreeBSD%20%C2%B7%20Web-native-0EA5C6?style=flat-square">
+  <img alt="macOS · Windows · Linux · FreeBSD · Web · Android" src="https://img.shields.io/badge/macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20FreeBSD%20%C2%B7%20Web%20%C2%B7%20Android-native-0EA5C6?style=flat-square">
   <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-3a3a3a?style=flat-square">
   <img alt="Status: early alpha" src="https://img.shields.io/badge/status-early%20alpha-d69e2e?style=flat-square">
   <br>
@@ -276,7 +276,7 @@ For the web build, install [trunk](https://trunkrs.dev/) and run `cargo xtask wa
 
 New contributors and AI agents: start with [`AGENTS.md`](AGENTS.md), then [`docs/`](docs/).
 
-Installers for macOS (universal, signed and notarized), Windows (x64, x86 and arm64), Linux (AppImage, `.deb`, `.rpm`, Flatpak and tarball), FreeBSD and the web are attached to each [GitHub release](https://github.com/storytold/figcraft/releases). Maintainers: [`docs/releasing.md`](docs/releasing.md) explains how releases are built, signed and published.
+Installers for macOS (universal, signed and notarized), Windows (x64, x86 and arm64), Linux (AppImage, `.deb`, `.rpm`, Flatpak and tarball), FreeBSD, **Android (arm64 APK, built with `cargo apk` from source; the in-app file browser replaces system dialogs, shared storage requires the "All files access" grant)**, and the web are attached to each [GitHub release](https://github.com/storytold/figcraft/releases). Maintainers: [`docs/releasing.md`](docs/releasing.md) explains how releases are built, signed and published.
 
 > [!IMPORTANT]
 > **Status:** FigCraft is in **alpha**: about 49% of the way to replacing proprietary tools for real work, by our own estimate. Nearly all tracked interface design actions in the menu checklist are wired ([`docs/parity-checklist.md`](docs/parity-checklist.md)) and the core editor works end to end, but FigCraft opens `.fig` files only best effort, has only a first preview of multiplayer (live sessions hosted from the app or a self-hosted server, with per-person undo and share links to edit or to view; no accounts, teams or cloud yet), runs its own WebAssembly plugins, and hasn't been checked against real design documents. The honest, area-by-area picture is in the [roadmap](ROADMAP.md) and [`docs/target-app-parity.md`](docs/target-app-parity.md). Expect rough edges and please file issues, or tell us what broke on [Discord](https://discord.gg/artcraft).
@@ -325,7 +325,7 @@ stand on its own.
 
 And [**ArtCraft**](https://getartcraft.com/) itself, our AI image and video studio for artists who want real control.
 
-The Crafting Apps share the same conventions: clean-room and pure Rust, native on macOS, Windows, Linux and FreeBSD, in the browser via WebAssembly, and fully drivable by agents.
+The Crafting Apps share the same conventions: clean-room and pure Rust, native on macOS, Windows, Linux, FreeBSD and Android, in the browser via WebAssembly, and fully drivable by agents.
 
 <br>
 
