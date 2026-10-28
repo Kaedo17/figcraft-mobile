@@ -45,6 +45,18 @@ pub fn generate(root: &Path) -> bool {
             ok &= render(&tile, size, &hd.join("ai.storyteller.figcraft.png"));
         }
     }
+    // Android launcher icons: one mipmap per density, and the APK manifest points at
+    // @mipmap/ic_launcher. These live in the entry crate's res/ tree (which cargo-apk runs
+    // `aapt package -S res` over), not assets/: aapt rejects a second resource name per
+    // directory, so they must be named exactly ic_launcher.png — the ATTRIBUTION.md rows cover
+    // them like every other asset. See `cargo xtask assets`.
+    for ds in ["mdpi:48", "hdpi:72", "xhdpi:96", "xxhdpi:144", "xxxhdpi:192"] {
+        let (d, s) = ds.split_once(':').unwrap_or((ds, "48"));
+        let size: u32 = s.parse().unwrap_or(48);
+        let hd = root.join(format!("apps/figcraft-android/res/mipmap-{d}"));
+        let _ = std::fs::create_dir_all(&hd);
+        ok &= render(&tile, size, &hd.join("ic_launcher.png"));
+    }
     // Windows .ico (PNG-compressed entries).
     let sizes = [16u32, 20, 24, 32, 40, 48, 64, 128, 256];
     let pngs: Vec<Vec<u8>> = sizes

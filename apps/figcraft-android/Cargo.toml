@@ -42,6 +42,11 @@ jni = "0.21"
 package = "ai.storyteller.figcraft"
 apk_name = "figcraft"
 build_targets = ["aarch64-linux-android"]
+# The launcher icon: `res/mipmap-<density>/ic_launcher.png`, regenerated from the app's own
+# figcraft.svg by `cargo xtask icon` (each PNG has its ATTRIBUTION.md row, like every asset).
+# cargo-apk runs `aapt package -S res`, which is what turns these into the APK's
+# @mipmap/ic_launcher.
+resources = "res"
 
 # "All files access" (`MANAGE_EXTERNAL_STORAGE`): lets the in-app file browser reach shared
 # storage (`/storage/emulated/0`) so a save or export can land outside the app-private
@@ -68,6 +73,7 @@ target_sdk_version = 35
 [package.metadata.android.application]
 label = "FigCraft"
 theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+icon = "@mipmap/ic_launcher"
 
 [package.metadata.android.application.activity]
 # Every configuration change the activity handles itself instead of a restart (the same list the
