@@ -13,12 +13,12 @@ use crate::theme::{Tokens, regular};
 use crate::widgets::{self, PAD};
 
 /// The id of list `list` (any hashable key, e.g. `"fills"`).
-fn list_id(list: impl AsIdSalt) -> Id {
+pub fn list_id(list: impl AsIdSalt) -> Id {
     Id::unique(("list_drag", list))
 }
 
 /// The row of list `list` being dragged (its model index; temp data).
-fn drag_id(list: Id) -> Id {
+pub fn drag_id(list: Id) -> Id {
     list.with("dragging")
 }
 
@@ -112,7 +112,10 @@ impl ListDrag {
     /// the list, the move as `(from, to)` model indices (for `fill.move` and friends).
     pub fn finish(self, ui: &mut Ui) -> Option<(usize, usize)> {
         let from = self.dragging?;
-        let (pos, released) = ui.input(|i| (i.pointer.latest_pos(), i.pointer.any_released()));
+        // `interact_pos`, not `latest_pos`: on a touch screen the finger's lift is a `PointerGone`,
+        // which empties `latest_pos` (and `hover_pos`) on the release frame — the only frame a
+        // drop commits on. `interact_pos` survives it (and equals it for a mouse).
+        let (pos, released) = ui.input(|i| (i.pointer.interact_pos(), i.pointer.any_released()));
         let target = pos.and_then(|p| drop_slot(&self.rows, from, p, self.reversed));
         if let Some((_, y)) = target
             && let Some(span) = self.span()
@@ -236,5 +239,104 @@ mod tests {
         // The first between the second and third: model 1.
         assert_eq!(drop_slot(&r, 0, pos2(100.0, 70.0), false), Some((1, 64.0)));
         assert_eq!(drop_slot(&r, 1, pos2(100.0, 40.0), false), None);
+    }
+}
+
+#[cfg(test)]
+mod touch_reorder_tests {
+    use super::*;
+    use crate::widgets::{TouchRow, touch_row};
+
+    /// A pages-like list — rows sense click and drag, `touch_row` arbitrates the finger, the Grab
+    /// verdict inserts the drag and [`ListDrag::finish`] commits — fed egui-winit-style touch
+    /// input (a `Touch` event plus the emulated pointer events the backend sends, a `PointerGone`
+    /// when the finger lifts). `answers` stacks what `finish` returned each frame.
+    struct Bench {
+        answers: Vec<Option<(usize, usize)>>,
+        /// Row 5's centre and row 3's centre, captured on the warm-up frame (the layout is stable
+        /// at offset 0): the finger presses on 5 and drops just below 3's centre (a (5, 4) move).
+        press: egui::Pos2,
+        drop: egui::Pos2,
+    }
+
+    fn frame(b: &mut Bench, ctx: &egui::Context, events: Vec<egui::Event>, at: f64) {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 200.0));
+        let area = egui::Id::unique("bench-pages-list");
+        let warm = events.is_empty();
+        let input = egui::RawInput { screen_rect: Some(screen), time: Some(at), events, ..Default::default() };
+        let mut run = ctx.run_ui(input, |ui| {
+            egui::ScrollArea::vertical().id_salt(area).auto_shrink([false, false]).show(ui, |ui| {
+                let mut reorder = ListDrag::in_order(ui, "bench-pages");
+                for i in 0..10 {
+                    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click_and_drag());
+                    let touch = touch_row(ui, &resp, area);
+                    if !matches!(touch, TouchRow::Scroll | TouchRow::Pressing) {
+                        reorder.row_by(&resp, i, r, || format!("row {i}"));
+                    }
+                    if matches!(touch, TouchRow::Grab) {
+                        ui.data_mut(|d| d.insert_temp(drag_id(list_id("bench-pages")), i));
+                    }
+                    if warm && i == 5 {
+                        b.press = r.center();
+                    }
+                    if warm && i == 3 {
+                        b.drop = pos2(r.center().x, r.center().y + 5.0);
+                    }
+                }
+                b.answers.push(reorder.finish(ui));
+            });
+        });
+        run.textures_delta.clear();
+    }
+
+    fn bench() -> (egui::Context, Bench) {
+        (egui::Context::default(), Bench { answers: Vec::new(), press: egui::Pos2::ZERO, drop: egui::Pos2::ZERO })
+    }
+
+    fn touch(phase: egui::TouchPhase, pos: egui::Pos2) -> egui::Event {
+        egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos, force: Some(0.5) }
+    }
+
+    fn button(pos: egui::Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() }
+    }
+
+    /// A finger that holds on a row and then drags it two rows up: the drop must commit. The
+    /// finger's lift is a `PointerGone`, which makes egui's `latest_pos`/`hover_pos` `None` on the
+    /// release frame — the commit reads the pointer position, so it must read one that survives
+    /// the lift.
+    #[test]
+    fn a_touch_reorder_commits_on_release() {
+        let (ctx, mut b) = bench();
+        frame(&mut b, &ctx, vec![], -0.1);
+        let (p0, p2) = (b.press, b.drop);
+        let p1 = pos2(p0.x, (p0.y + p2.y) / 2.0);
+        frame(&mut b, &ctx, vec![touch(egui::TouchPhase::Start, p0), egui::Event::PointerMoved(p0), button(p0, true)], 0.0);
+        // The hold beats the arbiter's grab window (0.55 s) but not egui's long-press.
+        for k in 1..=6 {
+            frame(&mut b, &ctx, vec![touch(egui::TouchPhase::Move, p0), egui::Event::PointerMoved(p0)], 0.1 * k as f64);
+        }
+        frame(&mut b, &ctx, vec![touch(egui::TouchPhase::Move, p1), egui::Event::PointerMoved(p1)], 0.7);
+        frame(&mut b, &ctx, vec![touch(egui::TouchPhase::Move, p2), egui::Event::PointerMoved(p2)], 0.8);
+        // The finger lifts: TouchPhase::End, the emulated mouse's button up, and the pointer gone.
+        frame(&mut b, &ctx, vec![touch(egui::TouchPhase::End, p2), button(p2, false), egui::Event::PointerGone], 0.9);
+        frame(&mut b, &ctx, vec![], 1.0);
+        assert!(b.answers.iter().any(|a| *a == Some((5, 4))), "the touch reorder commits: {:?}", b.answers);
+    }
+
+    /// The same reorder by mouse: the pointer never goes gone, so this commits today and must
+    /// keep committing after the release-frame read changes.
+    #[test]
+    fn a_mouse_reorder_commits_on_release() {
+        let (ctx, mut b) = bench();
+        frame(&mut b, &ctx, vec![], -0.1);
+        let (p0, p2) = (b.press, b.drop);
+        let p1 = pos2(p0.x, (p0.y + p2.y) / 2.0);
+        frame(&mut b, &ctx, vec![egui::Event::PointerMoved(p0), button(p0, true)], 0.0);
+        frame(&mut b, &ctx, vec![egui::Event::PointerMoved(p1)], 0.7);
+        frame(&mut b, &ctx, vec![egui::Event::PointerMoved(p2)], 0.8);
+        frame(&mut b, &ctx, vec![button(p2, false)], 0.9);
+        frame(&mut b, &ctx, vec![], 1.0);
+        assert!(b.answers.iter().any(|a| *a == Some((5, 4))), "the mouse reorder commits: {:?}", b.answers);
     }
 }

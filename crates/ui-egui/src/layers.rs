@@ -250,8 +250,14 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
             if filtering && (divider || !name.to_lowercase().contains(&filter)) {
                 continue;
             }
-            let sense = if filtering { Sense::click() } else { Sense::click_and_drag() };
-            let (r, resp) = ui.allocate_exact_size(vec2(w, 32.0), sense);
+            let (r, resp) = ui.allocate_exact_size(vec2(w, 32.0), Sense::click_and_drag());
+            // A finger press on a page is arbitrated: an early move scrolls the list (the arbiter
+            // pans it), a hold then a move grabs the page to reorder, a still hold is left to
+            // egui's long-press (the row's menu), and a mouse press grabs on drag_started as it
+            // always did. The row keeps click-and-drag sense; the arbiter skips the row's own
+            // drag and click while the finger scrolls.
+            let touch = crate::widgets::touch_row(ui, &resp, egui::Id::unique("pages_list"));
+            let scrolling = matches!(touch, crate::widgets::TouchRow::Scroll | crate::widgets::TouchRow::Pressing);
             if dev && resp.drag_started() {
                 crate::menus::dev_mode_refuses(app, "page.move");
             }
@@ -261,7 +267,7 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                     ui.scroll_to_rect(r, None);
                 }
             }
-            if !filtering && !dev {
+            if !filtering && !dev && !scrolling {
                 reorder.row_by(&resp, k, r, || if divider { tr("Divider").to_string() } else { name.clone() });
             }
             a11y::list_item(&resp, if divider { tr("Divider") } else { &name }, id == cur);
@@ -296,16 +302,22 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
                 let font = if id == cur { semibold(11.0) } else { regular(11.0) };
                 crate::bidi::paint_name(ui.painter(), pos2(r.min.x + 10.0, r.center().y), &name, font, t.text, r.width() - 14.0);
             }
-            if resp.clicked() && !divider {
+            if resp.clicked() && !divider && !scrolling {
                 select = Some(id);
                 app.ui.pages_focus = Some(uid);
                 app.ui.layers_focus = false;
             }
-            if resp.double_clicked() && !crate::menus::dev_mode_refuses(app, "page.rename") {
+            if resp.double_clicked() && !scrolling && !crate::menus::dev_mode_refuses(app, "page.rename") {
                 app.ui.rename_page = Some((id, name.clone()));
                 // The field takes the focus next frame, once it's drawn: focusing it now would put a
                 // node that isn't there yet in the screen reader tree, which AccessKit aborts on.
                 ui.data_mut(|d| d.insert_temp(page_rename_start_id(), true));
+            }
+            // Touch: a hold then a move grabs the page for a reorder (the arbiter's verdict; a
+            // still hold belongs to the row's own long-press menu).
+            if matches!(touch, crate::widgets::TouchRow::Grab) && !divider && !crate::menus::dev_mode_refuses(app, "page.move") {
+                let drag_id = crate::list_drag::drag_id(crate::list_drag::list_id("pages"));
+                ui.data_mut(|d| d.insert_temp(drag_id, k));
             }
             crate::right::context_popup(&resp).show(|ui| {
                 if ui.button(tr("Rename page")).clicked() {
@@ -334,8 +346,9 @@ fn pages(app: &mut FigApp, ui: &mut Ui) {
         app.ui.pages_seen_page = Some(page_key);
     }
     // A drop outside the list's visible area (and the row gap at its edges) isn't on a page row,
-    // even one scrolled out of view.
-    if !ui.input(|i| i.pointer.latest_pos()).is_some_and(|p| moved.inner_rect.expand2(vec2(0.0, 3.0)).contains(p)) {
+    // even one scrolled out of view. `interact_pos`: a finger's lift empties `latest_pos` on the
+    // release frame (see `ListDrag::finish`).
+    if !ui.input(|i| i.pointer.interact_pos()).is_some_and(|p| moved.inner_rect.expand2(vec2(0.0, 3.0)).contains(p)) {
         moved.inner = None;
         move_to = None;
     }
@@ -815,7 +828,7 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
     // The drag is over a row that takes no drop: the not-allowed cursor shows.
     let mut refused = false;
     // Only the rows in view are laid out and drawn; the rest is empty scroll space.
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show_viewport(ui, |ui, viewport| {
+    egui::ScrollArea::vertical().auto_shrink([false, false]).id_salt("layers_list").show_viewport(ui, |ui, viewport| {
         let pitch = ROW + ui.spacing().item_spacing.y;
         let top = ui.max_rect().top();
         let total = rows.len() as f32 * pitch;
@@ -852,13 +865,21 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
         let first = ((viewport.min.y / pitch).floor().max(0.0) as usize).min(rows.len());
         let last = ((viewport.max.y / pitch).ceil().max(0.0) as usize).saturating_add(1).min(rows.len());
         let band = Rect::from_x_y_ranges(ui.max_rect().x_range(), (top + first as f32 * pitch)..=(top + last as f32 * pitch));
+
         let mut band_ui = ui.new_child(egui::UiBuilder::new().max_rect(band));
         // Stable widget ids for a row wherever the list is scrolled.
         band_ui.skip_ahead_auto_ids(first);
         let ui = &mut band_ui;
+        // A finger press on a layer is arbitrated: an early move scrolls the list (the arbiter
+        // pans it), a hold then a move grabs the layer to reorder, a still hold is left to egui's
+        // long-press (the row's menu), and a mouse press grabs on drag_started as it always did.
+        // Rows keep click-and-drag sense; the arbiter skips the row's own drag and click while
+        // the finger scrolls.
         for row in rows.iter().take(last).skip(first) {
             let Some(n) = doc.node(row.id) else { continue };
             let (r, resp) = ui.allocate_exact_size(vec2(w, ROW), Sense::click_and_drag());
+            let touch = crate::widgets::touch_row(ui, &resp, egui::Id::unique("layers_list"));
+            let scrolling = matches!(touch, crate::widgets::TouchRow::Scroll | crate::widgets::TouchRow::Pressing);
             let selected = sel.contains(&row.id);
             a11y::layer_row(&mut app.ui.nav, &resp);
             if sel.last() == Some(&row.id) {
@@ -970,7 +991,9 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 if eresp.clicked() {
                     vis = Some(row.id);
                 }
-                if eresp.drag_started() {
+                if eresp.drag_started() && touch == crate::widgets::TouchRow::None {
+                    // Sweep on a drag is a mouse gesture: a finger press here is arbitrated by the
+                    // row (`touch_row` above), so scrolling from the eye must not sweep.
                     sweep = Some(Sweep { lock: false, on: n.visible, ids: vec![row.id] });
                 }
             }
@@ -984,14 +1007,15 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 if lresp.clicked() {
                     lock = Some(row.id);
                 }
-                if lresp.drag_started() {
+                if lresp.drag_started() && touch == crate::widgets::TouchRow::None {
+                    // Mouse-only, as for the eye above.
                     sweep = Some(Sweep { lock: true, on: !n.locked, ids: vec![row.id] });
                 }
             }
-            if resp.clicked() {
+            if resp.clicked() && !scrolling {
                 clicked = Some((row.id, ui.input(|i| i.modifiers)));
             }
-            if resp.double_clicked() && !crate::menus::dev_mode_refuses(app, "object.rename") {
+            if resp.double_clicked() && !scrolling && !crate::menus::dev_mode_refuses(app, "object.rename") {
                 app.ui.rename = Some(Rename { id: row.id, start: true });
             }
             if resp.secondary_clicked() {
@@ -1002,8 +1026,13 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                 app.ui.context_menu = Some((pos, vec![row.id]));
                 app.ui.context_menu_shown = false;
             }
-            // Drag to reorder.
-            if resp.drag_started() && !crate::menus::dev_mode_refuses(app, "node.reparent") {
+            // Touch: a hold then a move grabs the layer for a reorder (the arbiter's verdict; a
+            // still hold belongs to the row's own long-press menu).
+            if matches!(touch, crate::widgets::TouchRow::Grab) && !crate::menus::dev_mode_refuses(app, "node.reparent") {
+                ui.data_mut(|d| d.insert_temp(drag_id, row.id));
+            }
+            // Drag to reorder (mouse).
+            if resp.drag_started() && !scrolling && !crate::menus::dev_mode_refuses(app, "node.reparent") {
                 ui.data_mut(|d| d.insert_temp(drag_id, row.id));
             }
             let over = dragging.is_some() && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| r.contains(p));
@@ -1013,7 +1042,9 @@ fn layers(app: &mut FigApp, ui: &mut Ui) {
                     || n.parent.is_some_and(|p| figcraft_engine::components::structure_locked(&doc, p)));
             if dragging.is_some()
                 && !blocked(row.id)
-                && let Some(p) = ui.input(|i| i.pointer.hover_pos())
+                // `interact_pos`: a finger's lift empties `hover_pos` on the release frame, the
+                // only frame the drop below commits on (see `ListDrag::finish`).
+                && let Some(p) = ui.input(|i| i.pointer.interact_pos())
                 && r.contains(p)
             {
                 let rel = (p.y - r.min.y) / r.height();
